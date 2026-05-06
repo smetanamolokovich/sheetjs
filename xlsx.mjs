@@ -11007,9 +11007,63 @@ function write_sty_xml(wb/*:Workbook*/, opts)/*:string*/ {
 		'xmlns:vt': XMLNS.vt
 	})], w;
 	if(wb.SSF && (w = write_numFmts(wb.SSF)) != null) o[o.length] = w;
-	o[o.length] = ('<fonts count="1"><font><sz val="12"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font></fonts>');
-	o[o.length] = ('<fills count="2"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill></fills>');
-	o[o.length] = ('<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>');
+
+	/* Fonts */
+	var fonts = opts._fonts || [];
+	var fontsXml = '<fonts count="' + (1 + fonts.length) + '"><font><sz val="12"/><color theme="1"/><name val="Calibri"/><family val="2"/><scheme val="minor"/></font>';
+	for(var fi = 0; fi < fonts.length; ++fi) {
+		var font = fonts[fi];
+		fontsXml += '<font>';
+		if(font.bold) fontsXml += '<b/>';
+		if(font.italic) fontsXml += '<i/>';
+		if(font.underline) fontsXml += '<u/>';
+		if(font.strike) fontsXml += '<strike/>';
+		fontsXml += '<sz val="' + (font.sz || 12) + '"/>';
+		if(font.color && font.color.rgb) fontsXml += '<color rgb="' + (font.color.rgb.length === 6 ? 'FF' + font.color.rgb : font.color.rgb) + '"/>';
+		else fontsXml += '<color theme="1"/>';
+		fontsXml += '<name val="' + (font.name || 'Calibri') + '"/>';
+		fontsXml += '</font>';
+	}
+	fontsXml += '</fonts>';
+	o[o.length] = fontsXml;
+
+	/* Fills — OOXML requires "none" and "gray125" as first two fills */
+	var fills = opts._fills || [];
+	var fillsXml = '<fills count="' + (2 + fills.length) + '"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill>';
+	for(var fli = 0; fli < fills.length; ++fli) {
+		var fill = fills[fli];
+		fillsXml += '<fill><patternFill patternType="solid">';
+		if(fill.fgColor && fill.fgColor.rgb) fillsXml += '<fgColor rgb="' + (fill.fgColor.rgb.length === 6 ? 'FF' + fill.fgColor.rgb : fill.fgColor.rgb) + '"/>';
+		if(fill.bgColor && fill.bgColor.rgb) fillsXml += '<bgColor rgb="' + (fill.bgColor.rgb.length === 6 ? 'FF' + fill.bgColor.rgb : fill.bgColor.rgb) + '"/>';
+		else fillsXml += '<bgColor indexed="64"/>';
+		fillsXml += '</patternFill></fill>';
+	}
+	fillsXml += '</fills>';
+	o[o.length] = fillsXml;
+
+	/* Borders */
+	var borders = opts._borders || [];
+	var bordersXml = '<borders count="' + (1 + borders.length) + '"><border><left/><right/><top/><bottom/><diagonal/></border>';
+	for(var bi = 0; bi < borders.length; ++bi) {
+		var border = borders[bi];
+		bordersXml += '<border>';
+		var sides = ['left','right','top','bottom'];
+		for(var si = 0; si < sides.length; ++si) {
+			var side = sides[si];
+			if(border[side]) {
+				var style = border[side].style || 'thin';
+				bordersXml += '<' + side + ' style="' + style + '">';
+				if(border[side].color && border[side].color.rgb) bordersXml += '<color rgb="' + (border[side].color.rgb.length === 6 ? 'FF' + border[side].color.rgb : border[side].color.rgb) + '"/>';
+				bordersXml += '</' + side + '>';
+			} else {
+				bordersXml += '<' + side + '/>';
+			}
+		}
+		bordersXml += '<diagonal/></border>';
+	}
+	bordersXml += '</borders>';
+	o[o.length] = bordersXml;
+
 	o[o.length] = ('<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>');
 	if((w = write_cellXfs(opts.cellXfs))) o[o.length] = (w);
 	o[o.length] = ('<cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>');
@@ -15181,15 +15235,59 @@ function get_cell_style(styles/*:Array<any>*/, cell/*:Cell*/, opts) {
 			break;
 		}
 	}
-	for(i = 0; i != len; ++i) if(styles[i].numFmtId === z) return i;
-	styles[len] = {
+
+	/* Resolve font, fill, border IDs from cell.s */
+	var fontId = 0, fillId = 0, borderId = 0;
+	var applyFont = 0, applyFill = 0, applyBorder = 0;
+	if(cell.s && opts._fonts) {
+		if(cell.s.font) {
+			var fkey = JSON.stringify(cell.s.font);
+			if(opts._fontMap[fkey] != null) { fontId = opts._fontMap[fkey]; }
+			else {
+				fontId = opts._fonts.length + 1;
+				opts._fontMap[fkey] = fontId;
+				opts._fonts.push(cell.s.font);
+			}
+			applyFont = 1;
+		}
+		if(cell.s.fill) {
+			var flkey = JSON.stringify(cell.s.fill);
+			if(opts._fillMap[flkey] != null) { fillId = opts._fillMap[flkey]; }
+			else {
+				fillId = opts._fills.length + 2;
+				opts._fillMap[flkey] = fillId;
+				opts._fills.push(cell.s.fill);
+			}
+			applyFill = 1;
+		}
+		if(cell.s.border) {
+			var bkey = JSON.stringify(cell.s.border);
+			if(opts._borderMap[bkey] != null) { borderId = opts._borderMap[bkey]; }
+			else {
+				borderId = opts._borders.length + 1;
+				opts._borderMap[bkey] = borderId;
+				opts._borders.push(cell.s.border);
+			}
+			applyBorder = 1;
+		}
+	}
+
+	for(i = 0; i != len; ++i) {
+		var xf = styles[i];
+		if(xf.numFmtId === z && xf.fontId === fontId && xf.fillId === fillId && xf.borderId === borderId) return i;
+	}
+	var entry = {
 		numFmtId:z,
-		fontId:0,
-		fillId:0,
-		borderId:0,
-		xfId:0,
-		applyNumberFormat:1
+		fontId:fontId,
+		fillId:fillId,
+		borderId:borderId,
+		xfId:0
 	};
+	if(z != null && z !== 0) entry.applyNumberFormat = 1;
+	if(applyFont) entry.applyFont = 1;
+	if(applyFill) entry.applyFill = 1;
+	if(applyBorder) entry.applyBorder = 1;
+	styles[len] = entry;
 	return len;
 }
 
@@ -15366,8 +15464,33 @@ function write_ws_xml_sheetpr(ws, wb, idx, opts, o) {
 		payload = (payload||"") + writextag('outlinePr', null, outlineprops);
 	}
 
+	if(ws && ws["!pageSetup"]) {
+		var ps = ws["!pageSetup"];
+		if(ps.fitToWidth != null || ps.fitToHeight != null) {
+			needed = true;
+			payload = (payload||"") + writextag('pageSetUpPr', null, {fitToPage:"1"});
+		}
+	}
+
 	if(!needed && !payload) return;
 	o[o.length] = (writextag('sheetPr', payload, props));
+}
+
+/* 18.3.1.63 pageSetup CT_PageSetup */
+function write_ws_xml_pagesetup(ws) {
+	if(!ws || !ws["!pageSetup"]) return "";
+	var ps = ws["!pageSetup"];
+	var attrs = {};
+	if(ps.paperSize != null) attrs.paperSize = ps.paperSize;
+	if(ps.orientation != null) attrs.orientation = ps.orientation;
+	if(ps.scale != null) attrs.scale = ps.scale;
+	if(ps.fitToWidth != null) attrs.fitToWidth = ps.fitToWidth;
+	if(ps.fitToHeight != null) attrs.fitToHeight = ps.fitToHeight;
+	if(ps.firstPageNumber != null) { attrs.firstPageNumber = ps.firstPageNumber; attrs.useFirstPageNumber = "1"; }
+	if(ps.horizontalDpi != null) attrs.horizontalDpi = ps.horizontalDpi;
+	if(ps.verticalDpi != null) attrs.verticalDpi = ps.verticalDpi;
+	if(ps.copies != null) attrs.copies = ps.copies;
+	return writextag('pageSetup', null, attrs);
 }
 
 /* 18.3.1.85 sheetProtection CT_SheetProtection */
@@ -15863,7 +15986,8 @@ function write_ws_xml(idx/*:number*/, opts, wb/*:Workbook*/, rels)/*:string*/ {
 
 	if(ws['!margins'] != null) o[o.length] =  write_ws_xml_margins(ws['!margins']);
 
-	/* pageSetup */
+	/* 18.3.1.63 pageSetup */
+	if(ws['!pageSetup'] != null) o[o.length] = write_ws_xml_pagesetup(ws);
 	/* headerFooter */
 	/* rowBreaks */
 	/* colBreaks */
@@ -25390,7 +25514,10 @@ function write_zip_xlsb(wb/*:Workbook*/, opts/*:WriteOpts*/)/*:ZIP*/ {
 	var f = "", rId = 0;
 
 	opts.cellXfs = [];
-	get_cell_style(opts.cellXfs, {}, {revssf:{"General":0}});
+	opts._fonts = []; opts._fontMap = {};
+	opts._fills = []; opts._fillMap = {};
+	opts._borders = []; opts._borderMap = {};
+	get_cell_style(opts.cellXfs, {}, {revssf:{"General":0}, _fonts:opts._fonts, _fontMap:opts._fontMap, _fills:opts._fills, _fillMap:opts._fillMap, _borders:opts._borders, _borderMap:opts._borderMap});
 
 	if(!wb.Props) wb.Props = {};
 
@@ -25525,7 +25652,10 @@ function write_zip_xlsx(wb/*:Workbook*/, opts/*:WriteOpts*/)/*:ZIP*/ {
 	var f = "", rId = 0;
 
 	opts.cellXfs = [];
-	get_cell_style(opts.cellXfs, {}, {revssf:{"General":0}});
+	opts._fonts = []; opts._fontMap = {};
+	opts._fills = []; opts._fillMap = {};
+	opts._borders = []; opts._borderMap = {};
+	get_cell_style(opts.cellXfs, {}, {revssf:{"General":0}, _fonts:opts._fonts, _fontMap:opts._fontMap, _fills:opts._fills, _fillMap:opts._fillMap, _borders:opts._borders, _borderMap:opts._borderMap});
 
 	if(!wb.Props) wb.Props = {};
 
